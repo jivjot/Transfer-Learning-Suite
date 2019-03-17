@@ -22,7 +22,7 @@ from keras import optimizers
 from keras import losses
 from keras.optimizers import SGD, Adam
 from keras.models import Sequential, Model
-from keras.callbacks import ModelCheckpoint, LearningRateScheduler
+from keras.callbacks import ModelCheckpoint, LearningRateScheduler,Callback
 from keras.models import load_model
 
 # Utils
@@ -36,6 +36,15 @@ import time, datetime
 
 # Files
 import utils
+
+class TestCallback(Callback):
+    def __init__(self, test_generator,steps):
+        self.test_generator =  test_generator
+        self.steps = steps
+
+    def on_epoch_end(self, epoch, logs={}):
+        res = self.model.evaluate_generator(self.test_generator,steps=self.steps)
+        print('\n{} Testing loss'.format(epoch) + str(res))
 
 # For boolean input from the command line
 def str2bool(v):
@@ -75,6 +84,7 @@ HEIGHT = args.resize_height
 FC_LAYERS = [1024, 1024]
 TRAIN_DIR = args.dataset + "/train/"
 VAL_DIR = args.dataset + "/val/"
+TEST_DIR = args.dataset + "/test/"
 
 preprocessing_function = None
 base_model = None
@@ -133,7 +143,7 @@ elif args.model == "NASNetMobile":
 else:
     ValueError("The model you requested is not supported in Keras")
 
-    
+
 if args.mode == "train":
     print("\n***** Begin training *****")
     print("Dataset -->", args.dataset)
@@ -162,14 +172,16 @@ if args.mode == "train":
       shear_range=args.shear,
       zoom_range=args.zoom,
       horizontal_flip=args.h_flip,
-      vertical_flip=args.v_flip
+      vertical_flip=args.v_flip#,
+#      brightness_range=(0.1,0.9)
     )
 
     val_datagen = ImageDataGenerator(preprocessing_function=preprocessing_function)
+    test_datagen = ImageDataGenerator(preprocessing_function=preprocessing_function)
 
     train_generator = train_datagen.flow_from_directory(TRAIN_DIR, target_size=(HEIGHT, WIDTH), batch_size=BATCH_SIZE)
-
     validation_generator = val_datagen.flow_from_directory(VAL_DIR, target_size=(HEIGHT, WIDTH), batch_size=BATCH_SIZE)
+    test_generator = test_datagen.flow_from_directory(TEST_DIR, target_size=(HEIGHT, WIDTH), batch_size=BATCH_SIZE)
 
 
     # Save the list of classes for prediction mode later
@@ -186,6 +198,7 @@ if args.mode == "train":
 
     num_train_images = utils.get_num_files(TRAIN_DIR)
     num_val_images = utils.get_num_files(VAL_DIR)
+    num_test_images = utils.get_num_files(TEST_DIR)
 
     def lr_decay(epoch):
         if epoch%20 == 0 and epoch!=0:
@@ -198,14 +211,35 @@ if args.mode == "train":
 
     filepath="./checkpoints/" + args.model + "_model_weights.h5"
     checkpoint = ModelCheckpoint(filepath, monitor=["acc"], verbose=1, mode='max')
-    callbacks_list = [checkpoint]
+    callbacks_list = [checkpoint,TestCallback(test_generator,num_test_images // BATCH_SIZE)]
 
 
-    history = finetune_model.fit_generator(train_generator, epochs=args.num_epochs, workers=8, steps_per_epoch=num_train_images // BATCH_SIZE, 
+    history = finetune_model.fit_generator(train_generator, epochs=args.num_epochs, workers=8, steps_per_epoch=num_train_images // BATCH_SIZE,
         validation_data=validation_generator, validation_steps=num_val_images // BATCH_SIZE, class_weight='auto', shuffle=True, callbacks=callbacks_list)
 
 
-    plot_training(history)
+    #plot_training(history)
+
+elif args.mode == 'test':
+    print("\n***** Begin test *****")
+    if not os.path.isdir("checkpoints"):
+        os.makedirs("checkpoints")
+    test_datagen =  ImageDataGenerator(
+      preprocessing_function=preprocessing_function)
+    test_generator = test_datagen.flow_from_directory(TEST_DIR, target_size=(HEIGHT, WIDTH), batch_size=BATCH_SIZE)
+    class_list_file = "./checkpoints/" + args.model + "_" + args.dataset + "_class_list.txt"
+    class_list = utils.load_class_list(class_list_file)
+
+    finetune_model = utils.build_finetune_model(base_model, dropout=args.dropout, fc_layers=FC_LAYERS, num_classes=len(class_list))
+    finetune_model.load_weights("./checkpoints/" + args.model + "_model_weights.h5")
+    adam = Adam(lr=0.00001)
+    finetune_model.compile(adam, loss='categorical_crossentropy', metrics=['accuracy'])
+
+    num_test_images = utils.get_num_files(TEST_DIR)
+    model = finetune_model.evaluate_generator(test_generator,steps=num_test_images//BATCH_SIZE)
+    print (model)
+
+
 
 elif args.mode == "predict":
 
@@ -225,8 +259,8 @@ elif args.mode == "predict":
     class_list_file = "./checkpoints/" + args.model + "_" + args.dataset + "_class_list.txt"
 
     class_list = utils.load_class_list(class_list_file)
-    
-    finetune_model = utils.build_finetune_model(base_model, len(class_list))
+
+    finetune_model = utils.build_finetune_model(base_model, num_classes=len(class_list))
     finetune_model.load_weights("./checkpoints/" + args.model + "_model_weights.h5")
 
     # Run the classifier and print results

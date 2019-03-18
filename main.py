@@ -33,18 +33,37 @@ import random, glob
 import os, sys, csv
 import cv2
 import time, datetime
+from sklearn.metrics import classification_report
 
 # Files
 import utils
+import keras.backend as K
+import pickle
+
 
 class TestCallback(Callback):
-    def __init__(self, test_generator,steps):
+    def __init__(self, test_generator,steps,checkpoint):
         self.test_generator =  test_generator
         self.steps = steps
+        self.checkpoint = checkpoint
 
     def on_epoch_end(self, epoch, logs={}):
-        res = self.model.evaluate_generator(self.test_generator,steps=self.steps)
-        print('\n{} Testing loss'.format(epoch) + str(res))
+        li = []
+        li_out = []
+        for i in range(0,self.steps):
+            out = self.model.predict(self.test_generator[i][0])
+            li.append(self.test_generator[i][1])
+            li_out.append(out)
+        labels = np.concatenate(li)
+        out = np.concatenate(li_out)
+        #out = self.model.predict_generator(self.test_generator,steps=self.steps)
+        target_names = list(map(lambda l:l[0],class_list))
+        print(classification_report(np.argmax(labels,axis=1), np.argmax(out,axis=1),target_names=target_names))
+        print (class_list)
+        if self.checkpoint is not None:
+            with open('ModelCheckpoint.pickle','wb') as fp:
+                pickle.dump(self.checkpoint,fp)
+
 
 # For boolean input from the command line
 def str2bool(v):
@@ -210,8 +229,13 @@ if args.mode == "train":
     learning_rate_schedule = LearningRateScheduler(lr_decay)
 
     filepath="./checkpoints/" + args.model + "_model_weights.h5"
-    checkpoint = ModelCheckpoint(filepath, monitor=["acc"], verbose=1, mode='max')
-    callbacks_list = [checkpoint,TestCallback(test_generator,num_test_images // BATCH_SIZE)]
+    if args.continue_training == False:
+        checkpoint = ModelCheckpoint(filepath, monitor="val_loss", verbose=1, mode='min',save_best_only=True)
+    else:
+        with open('ModelCheckpoint.pickle','rb') as fp:
+            checkpoint = pickle.load(fp)
+
+    callbacks_list = [checkpoint,TestCallback(test_generator,num_test_images // BATCH_SIZE,checkpoint)]
 
 
     history = finetune_model.fit_generator(train_generator, epochs=args.num_epochs, workers=8, steps_per_epoch=num_train_images // BATCH_SIZE,
@@ -229,11 +253,15 @@ elif args.mode == 'test':
     test_generator = test_datagen.flow_from_directory(TEST_DIR, target_size=(HEIGHT, WIDTH), batch_size=BATCH_SIZE)
     class_list_file = "./checkpoints/" + args.model + "_" + args.dataset + "_class_list.txt"
     class_list = utils.load_class_list(class_list_file)
+    num_test_images = utils.get_num_files(TEST_DIR)
 
     finetune_model = utils.build_finetune_model(base_model, dropout=args.dropout, fc_layers=FC_LAYERS, num_classes=len(class_list))
     finetune_model.load_weights("./checkpoints/" + args.model + "_model_weights.h5")
     adam = Adam(lr=0.00001)
     finetune_model.compile(adam, loss='categorical_crossentropy', metrics=['accuracy'])
+    testCallBack = TestCallback(test_generator,num_test_images // BATCH_SIZE,None)
+    testCallBack.model = finetune_model
+    testCallBack.on_epoch_end(0)
 
     num_test_images = utils.get_num_files(TEST_DIR)
     model = finetune_model.evaluate_generator(test_generator,steps=num_test_images//BATCH_SIZE)

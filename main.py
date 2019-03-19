@@ -56,8 +56,17 @@ class TestCallback(Callback):
             li_out.append(out)
         labels = np.concatenate(li)
         out = np.concatenate(li_out)
-        #out = self.model.predict_generator(self.test_generator,steps=self.steps)
+        filenames = self.test_generator.filenames[0:len(labels)]
         target_names = list(map(lambda l:l[0],class_list))
+        #for i in range(len(filenames)):
+        #    print (i,filenames[i])
+        #    print (i,labels[i])
+        #    print (i,out[i])
+        #    print (i,target_names[np.argmax(labels[i])])
+        #    print (i,target_names[np.argmax(out[i])])
+        #    print ()
+        #out = self.model.predict_generator(self.test_generator,steps=self.steps)
+        print (target_names)
         print(classification_report(np.argmax(labels,axis=1), np.argmax(out,axis=1),target_names=target_names))
         print (class_list)
         if self.checkpoint is not None:
@@ -250,7 +259,7 @@ elif args.mode == 'test':
         os.makedirs("checkpoints")
     test_datagen =  ImageDataGenerator(
       preprocessing_function=preprocessing_function)
-    test_generator = test_datagen.flow_from_directory(TEST_DIR, target_size=(HEIGHT, WIDTH), batch_size=BATCH_SIZE)
+    test_generator = test_datagen.flow_from_directory(TEST_DIR, target_size=(HEIGHT, WIDTH), batch_size=BATCH_SIZE,shuffle=False)
     class_list_file = "./checkpoints/" + args.model + "_" + args.dataset + "_class_list.txt"
     class_list = utils.load_class_list(class_list_file)
     num_test_images = utils.get_num_files(TEST_DIR)
@@ -263,9 +272,41 @@ elif args.mode == 'test':
     testCallBack.model = finetune_model
     testCallBack.on_epoch_end(0)
 
-    num_test_images = utils.get_num_files(TEST_DIR)
     model = finetune_model.evaluate_generator(test_generator,steps=num_test_images//BATCH_SIZE)
     print (model)
+
+elif args.mode == 'predict_all':
+    print("\n***** Begin test *****")
+    if not os.path.isdir("checkpoints"):
+        os.makedirs("checkpoints")
+    test_datagen =  ImageDataGenerator(
+      preprocessing_function=preprocessing_function)
+    test_generator = test_datagen.flow_from_directory(args.dataset, target_size=(HEIGHT, WIDTH), batch_size=BATCH_SIZE,shuffle=False)
+    #class_list_file = "./checkpoints/" + args.model + "_" + args.dataset + "_class_list.txt"
+    class_list_file = "checkpoints/MobileNet_dataset_class_list.txt"
+    class_list = utils.load_class_list(class_list_file)
+    num_test_images = utils.get_num_files_test(args.dataset)
+    print (num_test_images)
+    finetune_model = utils.build_finetune_model(base_model, dropout=args.dropout, fc_layers=FC_LAYERS, num_classes=len(class_list))
+    finetune_model.load_weights("./checkpoints/" + args.model + "_model_weights.h5")
+    adam = Adam(lr=0.00001)
+    finetune_model.compile(adam, loss='categorical_crossentropy', metrics=['accuracy'])
+    li_out = []
+    for i in range(0,len(test_generator)):
+        out = finetune_model.predict(test_generator[i][0])
+        print (out.shape)
+        print (len(li_out))
+        li_out.append(out)
+    out = np.concatenate(li_out)
+    results = dict(list(zip(test_generator.filenames[0:len(out)],out)))
+    target_names = list(map(lambda l:l[0],class_list))
+    for obj in results:
+        data = dict(zip(target_names,results[obj]))
+        results[obj] = data
+
+    with open('results.pickle','wb') as fp:
+        pickle.dump(results,fp)
+
 
 
 

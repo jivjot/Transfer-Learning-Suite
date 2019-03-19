@@ -52,6 +52,13 @@ def get_num_files(directory):
             cnt += len(glob.glob(os.path.join(r, dr + "/*")))
     return cnt
 
+
+def get_num_files_test(directory):
+    if not os.path.exists(directory):
+        return 0
+    return len(glob.glob(directory + '/*'))
+
+
 # Add on new FC layers with dropout for fine tuning
 def build_finetune_model(base_model, dropout, fc_layers, num_classes):
     for layer in base_model.layers:
@@ -64,7 +71,7 @@ def build_finetune_model(base_model, dropout, fc_layers, num_classes):
         x = Dropout(dropout)(x)
 
     predictions = Dense(num_classes, activation='softmax')(x) # New softmax layer
-    
+
     finetune_model = Model(inputs=base_model.input, outputs=predictions)
 
     return finetune_model
